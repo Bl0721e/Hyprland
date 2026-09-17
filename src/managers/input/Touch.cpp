@@ -26,14 +26,23 @@ void CInputManager::updateTouchFocusFromHitTest(const Vector2D& coords, PHLMONIT
     PHLWINDOW              foundWindow;
     PHLLS                  foundLayerSurface;
 
-    auto                   popup = m_relay.popupFromCoords(coords);
+    auto                   surfaceForWindow = [&](PHLWINDOW window) -> SP<CWLSurfaceResource> {
+        if (!window)
+            return nullptr;
+
+        if (window->m_isX11)
+            return window->wlSurface()->resource();
+
+        return Desktop::viewState()->hitTest().windowSurfaceAt(coords, window, surfaceCoords);
+    };
+
+    auto popup = m_relay.popupFromCoords(coords);
     if (popup)
         foundSurface = popup->getSurface();
 
     if (!foundSurface) {
-        foundWindow = Desktop::viewState()->hitTest().windowAt(coords, Desktop::View::FOCUS_PRIORITY);
-        if (foundWindow)
-            foundSurface = Desktop::viewState()->hitTest().windowSurfaceAt(coords, foundWindow, surfaceCoords);
+        foundWindow  = Desktop::viewState()->hitTest().windowAt(coords, Desktop::View::FOCUS_PRIORITY);
+        foundSurface = surfaceForWindow(foundWindow);
     }
 
     if (!foundSurface && !m_exclusiveLSes.empty()) {
@@ -59,9 +68,8 @@ void CInputManager::updateTouchFocusFromHitTest(const Vector2D& coords, PHLMONIT
         foundSurface = Desktop::viewState()->hitTest().layerSurfaceAt(coords, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &surfaceCoords, &foundLayerSurface);
 
     if (!foundSurface) {
-        foundWindow = Desktop::viewState()->hitTest().windowAt(coords, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
-        if (foundWindow)
-            foundSurface = Desktop::viewState()->hitTest().windowSurfaceAt(coords, foundWindow, surfaceCoords);
+        foundWindow  = Desktop::viewState()->hitTest().windowAt(coords, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+        foundSurface = surfaceForWindow(foundWindow);
 
         if (foundWindow && !foundSurface)
             foundSurface = foundWindow->wlSurface()->resource();
