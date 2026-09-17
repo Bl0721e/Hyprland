@@ -4,15 +4,80 @@
 #include "../../Compositor.hpp"
 #include "../../desktop/view/LayerSurface.hpp"
 #include "../../desktop/state/FocusState.hpp"
+#include "../../desktop/state/ViewState.hpp"
 #include "../../config/ConfigValue.hpp"
 #include "../../output/Monitor.hpp"
 #include "../../state/MonitorState.hpp"
 #include "../../devices/ITouch.hpp"
 #include "../../event/EventBus.hpp"
 #include "../SeatManager.hpp"
+#include "../../protocols/LayerShell.hpp"
 #include "../../protocols/core/DataDevice.hpp"
 #include "debug/log/Logger.hpp"
 #include "UnifiedWorkspaceSwipeGesture.hpp"
+
+void CInputManager::updateTouchFocusFromHitTest(const Vector2D& coords, PHLMONITOR monitor) {
+    m_foundSurfaceToFocus.reset();
+    m_foundLSToFocus.reset();
+    m_foundWindowToFocus.reset();
+
+    SP<CWLSurfaceResource> foundSurface;
+    Vector2D               surfaceCoords;
+    PHLWINDOW              foundWindow;
+    PHLLS                  foundLayerSurface;
+
+    auto                   popup = m_relay.popupFromCoords(coords);
+    if (popup)
+        foundSurface = popup->getSurface();
+
+    if (!foundSurface) {
+        foundWindow = Desktop::viewState()->hitTest().windowAt(coords, Desktop::View::FOCUS_PRIORITY);
+        if (foundWindow)
+            foundSurface = Desktop::viewState()->hitTest().windowSurfaceAt(coords, foundWindow, surfaceCoords);
+    }
+
+    if (!foundSurface && !m_exclusiveLSes.empty()) {
+        foundSurface = Desktop::viewState()->hitTest().layerPopupSurfaceAt(coords, &m_exclusiveLSes, &surfaceCoords, &foundLayerSurface);
+
+        if (!foundSurface)
+            foundSurface = Desktop::viewState()->hitTest().layerSurfaceAt(coords, &m_exclusiveLSes, &surfaceCoords, &foundLayerSurface);
+
+        if (!foundSurface) {
+            foundLayerSurface = m_exclusiveLSes.begin()->lock();
+            foundSurface      = foundLayerSurface ? foundLayerSurface->wlSurface()->resource() : nullptr;
+        }
+    }
+
+    if (!foundSurface)
+        foundSurface = Desktop::viewState()->hitTest().layerPopupSurfaceAt(coords, monitor, &surfaceCoords, &foundLayerSurface);
+
+    if (!foundSurface)
+        foundSurface =
+            Desktop::viewState()->hitTest().layerSurfaceAt(coords, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &surfaceCoords, &foundLayerSurface);
+
+    if (!foundSurface)
+        foundSurface = Desktop::viewState()->hitTest().layerSurfaceAt(coords, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &surfaceCoords, &foundLayerSurface);
+
+    if (!foundSurface) {
+        foundWindow = Desktop::viewState()->hitTest().windowAt(coords, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+        if (foundWindow)
+            foundSurface = Desktop::viewState()->hitTest().windowSurfaceAt(coords, foundWindow, surfaceCoords);
+
+        if (foundWindow && !foundSurface)
+            foundSurface = foundWindow->wlSurface()->resource();
+    }
+
+    if (!foundSurface)
+        foundSurface = Desktop::viewState()->hitTest().layerSurfaceAt(coords, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM], &surfaceCoords, &foundLayerSurface);
+
+    if (!foundSurface)
+        foundSurface =
+            Desktop::viewState()->hitTest().layerSurfaceAt(coords, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], &surfaceCoords, &foundLayerSurface);
+
+    m_foundLSToFocus      = foundLayerSurface;
+    m_foundWindowToFocus  = foundWindow;
+    m_foundSurfaceToFocus = foundSurface;
+}
 
 void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     m_lastInputTouch = true;
@@ -41,7 +106,10 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
 
     m_touchData.lastTouchPos = TOUCH_COORDS;
 
-    refocus(TOUCH_COORDS);
+    if (isConstrained())
+        updateTouchFocusFromHitTest(TOUCH_COORDS, PMONITOR);
+    else
+        refocus(TOUCH_COORDS);
 
     if (m_clickBehavior == CLICKMODE_KILL) {
         IPointer::SButtonEvent e;
